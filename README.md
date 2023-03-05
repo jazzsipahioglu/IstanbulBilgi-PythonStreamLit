@@ -1,0 +1,2 @@
+# IstanbulBilgi-PythonStreamLit
+Graduation Project
