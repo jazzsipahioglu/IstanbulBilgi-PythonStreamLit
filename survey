@@ -1,0 +1,27 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+
+
+
+col1, col2, col3= st.beta_columns(3)
+
+with col1:
+    with st.form('Soru 1'):
+        st.selectbox('Getiri ve risk alma hususlarında ne düşünüyorsunuz?', ['1 yıl', '1-3 yıl'], key=1)
+        st.slider(label='Bir değer seçiniz', min_value=0, max_value=100, key=4)
+        submitted1 = st.form_submit_button('Onayla')
+
+with col2:
+    with st.form('Soru 2'):
+        st.selectbox('Finansal yatırım işlemleri hakkındaki bilginiz nasıldır?', ['Az', 'Orta', 'Çok'], key=2)
+        st.slider(label='Bir değer seçiniz', min_value=0, max_value=100, key=5)
+        submitted2 = st.form_submit_button('Onayla')
+
+with col3:
+    with st.form('Soru 3'):
+        st.selectbox('Getiri ve risk alma hususlarında ne düşünüyorsunuz?', ['Düzenli Getiri', 'Orta Getiri, Aralıklı Kayıp', 'Yüksek Getiri'],key=3)
+
+        st.slider(label='Bir değer seçiniz', min_value=0, max_value=100, key=6)
+        submitted2 = st.form_submit_button('Onayla')
