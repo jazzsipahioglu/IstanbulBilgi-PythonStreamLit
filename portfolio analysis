@@ -1,0 +1,188 @@
+import warnings
+import os
+
+import pandas as pd
+import streamlit as st
+import matplotlib.pyplot as plt
+import numpy as np
+import plotly.express as px
+import yfinance as yf
+from datetime import datetime, date
+
+st.header('PORTFOLYO OPTİMİZASYONU')
+
+
+stocks=st.sidebar.multiselect('En az 3 tane seçiniz',['GARAN.IS','ASELS.IS', 'TUPRS.IS', 'THYAO.IS'])
+# Appends some text to the app.
+
+df= yf.download(stocks, start="2022-01-01", end="2023-01-23")
+
+
+
+# remove multilevel
+df.columns = ['_'.join(col) for col in df.columns]
+
+# Just study adj close
+df = df.iloc[:,:4]
+df
+px.line(df * 100 / df.iloc[0])
+ret_port = df.pct_change()
+px.line(ret_port)
+
+np.random.seed(1)
+# Weight each security
+weights = np.random.random((4,1))
+# normalize it, so that some is one
+weights /= np.sum(weights)
+print(f'Ağırlıklar : {weights.flatten()}')
+
+# We generally do log return instead of return
+log_ret = np.log(df / df.shift(1))
+log_ret
+
+# Expected return (weighted sum of mean returns). Mult by 252 as we always do annual calculation and year has 252 business days
+exp_ret = log_ret.mean().dot(weights)*252
+st.write(f'\nExpected return of the portfolio is : {exp_ret[0]}')
+
+# Exp Volatility (Risk)
+exp_vol = np.sqrt(weights.T.dot(252*log_ret.cov().dot(weights)))
+st.write(f'\nVolatility of the portfolio: {exp_vol[0][0]}')
+
+# Sharpe ratio
+sr = exp_ret / exp_vol
+st.write(f'\nSharpe ratio of the portfolio: {sr[0][0]}')
+
+# number of simulation
+n = 50_000
+# n = 10
+
+port_weights = np.zeros(shape=(n,len(df.columns)))
+port_volatility = np.zeros(n)
+port_sr = np.zeros(n)
+port_return = np.zeros(n)
+
+num_securities = len(df.columns)
+# num_securities
+for i in range(n):
+    # Weight each security
+    weights = np.random.random(4)
+    # normalize it, so that some is one
+    weights /= np.sum(weights)
+    port_weights[i,:] = weights
+    #     print(f'Normalized Weights : {weights.flatten()}')
+
+    # Expected return (weighted sum of mean returns). Mult by 252 as we always do annual calculation and year has 252 business days
+    exp_ret = log_ret.mean().dot(weights)*252
+    port_return[i] = exp_ret
+#     print(f'\nExpected return is : {exp_ret[0]}')
+
+    # Exp Volatility (Risk)
+    exp_vol = np.sqrt(weights.T.dot(252*log_ret.cov().dot(weights)))
+    port_volatility[i] = exp_vol
+#     print(f'\nVolatility : {exp_vol[0][0]}')
+
+    # Sharpe ratio
+    sr = exp_ret / exp_vol
+    port_sr[i] = sr
+#     print(f'\nSharpe ratio : {sr[0][0]}')
+
+# Index of max Sharpe Ratio
+max_sr = port_sr.max()
+ind = port_sr.argmax()
+# Return and Volatility at Max SR
+max_sr_ret = port_return[ind]
+max_sr_vol = port_volatility[ind]
+
+plt.figure(figsize=(20,15))
+plt.scatter(port_volatility,port_return,c=port_sr, cmap='plasma')
+plt.colorbar(label='Sharpe Ratio')
+plt.xlabel('Volatility', fontsize=15)
+plt.ylabel('Return', fontsize=15)
+plt.title('Efficient Frontier (Bullet Plot)', fontsize=15)
+plt.scatter(max_sr_vol, max_sr_ret, c='blue', s=150, edgecolors='red', marker='o', label='Max \
+Sharpe ratio Portfolio')
+plt.legend();
+
+for weight, stock in zip(port_weights[ind], stocks):
+    st.write(f'{round(weight * 100, 2)} % of {stock} should be bought.')
+
+# best portfolio return
+st.write(f'\nMarkowitz optimal portfolio return is : {round(max_sr_ret * 100, 2)}% with volatility \
+{max_sr_vol}')
+
+from scipy import optimize
+
+log_mean = log_ret.mean() * 252
+cov = log_ret.cov() * 252
+
+# Some helper functions
+def get_ret_vol_sr(weights):
+    weights = np.array(weights)
+    ret = log_mean.dot(weights)
+    vol = np.sqrt(weights.T.dot(cov.dot(weights)))
+    sr = ret / vol
+    return np.array([ret, vol, sr])
+
+# Negate Sharpe ratio as we need to max it but Scipy minimize the given function
+def neg_sr(weights):
+    return get_ret_vol_sr(weights)[-1] * -1
+
+# check sum of weights
+def check_sum(weights):
+    return np.sum(weights) - 1
+
+# Constraints for the optimization problem
+cons = {'type':'eq','fun':check_sum}
+# bounds on weights
+bounds = ((0,1),(0,1),(0,1),(0,1))
+# initial guess for optimization to start with
+init_guess = [.25 for _ in range(4)]
+
+
+# Call minimizer
+opt_results = optimize.minimize(neg_sr, init_guess, constraints=cons, bounds=bounds, method='SLSQP')
+
+optimal_weights = opt_results.x
+# optimal_weights
+for st, i in zip(stocks,optimal_weights):
+    print(f'Stock {st} has weight {np.round(i*100,2)} %')
+
+mc_weights = port_weights[ind]
+for st, i in zip(stocks,mc_weights):
+    print(f'Stock {st} has weight {np.round(i*100,2)} %')
+
+# Comparing two results we see that we get very close results
+(optimal_weights - mc_weights)
+
+get_ret_vol_sr(optimal_weights), get_ret_vol_sr(mc_weights)
+
+st.write('Verilere Göre\n \n')
+for i, j in enumerate('Return Volatility SharpeRatio'.split()):
+    st.write(f'{j} is : {get_ret_vol_sr(optimal_weights)[i]}\n')
+
+st.write('Verilere Göre Monte Carlo\n \n')
+for i, j in enumerate('Return Volatility SharpeRatio'.split()):
+    st.write(f'{j} is : {get_ret_vol_sr(mc_weights)[i]}\n')
+
+frontier_y = np.linspace(port_return.min(), port_return.max(), 100)
+frontier_vol = []
+
+def minimize_vol(weights):
+    return get_ret_vol_sr(weights)[1]
+
+for possible_ret in frontier_y:
+    cons = ({'type':'eq','fun':check_sum},
+            {'type':'eq','fun':lambda w:get_ret_vol_sr(w)[0] - possible_ret})
+    result = optimize.minimize(minimize_vol, init_guess, method='SLSQP', constraints=cons, bounds=bounds)
+    frontier_vol.append(result['fun'])
+
+plt.figure(figsize=(20,15))
+plt.scatter(port_volatility,port_return,c=port_sr, cmap='plasma')
+plt.colorbar(label='Sharpe Ratio')
+plt.xlabel('Volatility', fontsize=15)
+plt.ylabel('Return', fontsize=15)
+plt.title('Efficient Frontier', fontsize=15)
+plt.scatter(max_sr_vol, max_sr_ret, c='blue', s=150, edgecolors='red', marker='o')
+
+plt.plot(frontier_vol, frontier_y, c='magenta', ls='--', lw=3, label='Efficient Frontier')
+plt.legend();
