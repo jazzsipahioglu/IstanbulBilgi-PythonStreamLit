@@ -1,0 +1,169 @@
+import os
+import warnings
+warnings.filterwarnings('ignore')
+import streamlit as st
+
+import yfinance as yf
+from datetime import datetime, timedelta
+import pandas as pd
+
+import numpy as np
+from prophet import Prophet
+from prophet.plot import plot_plotly, plot_components_plotly, plot_cross_validation_metric
+from st_aggrid import AgGrid
+from pandas.core.arrays import period
+from prophet.diagnostics import cross_validation
+from signal import signal
+import plotly as plotly
+import matplotlib.pyplot as plt
+
+import MetaTrader5 as mt5
+import plotly.graph_objects as go
+import time
+import threading
+from plotly.subplots import make_subplots
+from pynput.keyboard import Listener as KeyboardListener
+
+from pandas.plotting import register_matplotlib_converters
+register_matplotlib_converters()
+
+
+
+plt.style.use("ggplot")
+
+
+
+
+
+st.title("Finansal Analiz Platformu")
+st.write("Borsa, Kriptopara, Emtia Bilgi Platformu", st.session_state["my_input"])
+
+st.sidebar.title("Filtrele")
+
+islemturu = st.sidebar.radio("Varlık Türü", ["Kripto", "Borsa", "Döviz", "Emtia"])
+if islemturu == "Kripto":
+    kriptosec = st.sidebar.selectbox("Kripto Para Cinsi", ["BTC", "ETH", "XRP", "DOT", "DOGE", "AVAX", "BNB"])
+    kriptosec = kriptosec + "-USD"
+    sembol = kriptosec
+
+elif islemturu == "Emtia":
+    emtiasec = st.sidebar.selectbox("Emtia", ["ALTIN", "PETROL"])
+    emtialar = {
+        "ALTIN": "GC=F",
+        "PETROL": "CL=F"
+    }
+    commoditysec = emtialar[emtiasec]
+    sembol = commoditysec
+
+elif islemturu == "Döviz":
+    dovizsec = st.sidebar.selectbox("Döviz", ["DOLAR", "AVRO"])
+    dovizler = {
+        "DOLAR": "USDTRY=X",
+        "AVRO": "EURTRY=X"
+    }
+    parasec = dovizler[dovizsec]
+    sembol = parasec
+
+else:
+    borsasec = st.sidebar.selectbox("Hisse Senetleri", ["ASELSAN", "THY", "GARANTİ", "AKBANK", "BJK"])
+    senetler = {
+        "ASELSAN": "ASELS.IS",
+        "THY": "THYAO.IS",
+        "GARANTİ": "GARAN.IS",
+        "AKBANK": "AKBNK.IS",
+        "BJK": "BJKAS.IS"
+    }
+
+    hissesec = senetler[borsasec]
+    sembol = hissesec
+
+zaman_aralik = range(1, 91)
+slider = st.sidebar.select_slider("Zaman Aralığı", options=zaman_aralik, value=30)
+
+bugun = datetime.today()
+aralik = timedelta(days=slider)
+
+baslangic = st.sidebar.date_input("Başlangıç Tarihi", value=bugun - aralik)
+bitis = st.sidebar.date_input("Bitiş Tarihi", value=bugun)
+st.sidebar.write("Finansal İndikatörler")
+fi = st.sidebar.checkbox("Finansal İndikatörler")
+
+def grafikgetir(sembol, baslangic, bitis):
+    data = yf.Ticker(sembol)
+
+    global df
+    df = data.history(period="1d", start=baslangic, end=bitis)
+    st.line_chart(df["Close"])
+
+grafikgetir(sembol, baslangic, bitis)
+
+def SMA(data, period=30, column='Close'):
+    return data[column].rolling(window=period).mean()  # rollingin ortalaması
+
+def EMA(data, period=20, column='Close'):
+    return data[column].ewm(span=period, adjust=False).mean()  # üstel ağırlığın ortalaması
+
+def MACD(data, period_long=26, period_short=12, period_signal=9, column='Close'):
+    # Calculate the Short Term Exponential Moving Average
+    ShortEMA = EMA(data, period_short, column=column)  # AKA Fast moving average
+    # Calculate the Long Term Exponential Moving Average
+    LongEMA = EMA(data, period_long, column=column)  # AKA Slow moving average
+    # Calculate the Moving Average Convergence/Divergence (MACD)
+    data['MACD'] = ShortEMA - LongEMA
+    # Calcualte the signal line
+    data['Signal_Line'] = EMA(data, period_signal, column='MACD')
+    data['MACD'].ewm(span=period_signal, adjust=False).mean()
+    return data
+
+def RSI(data, period=14, column="Close"):
+    delta = data[column].diff(1)
+    delta = delta[1:]  # ilksatırı aldık
+    up = delta.copy()  # kopyaladık
+    down = delta.copy()
+    up[up < 0] = 0
+    down[down > 0] = 0
+    data["up"] = up
+    data["down"] = down
+    AVG_Gain = SMA(data, period, column='up')
+    AVG_Loss = abs(SMA(data, period, column='down'))
+    RS = AVG_Gain / AVG_Loss
+    RSI = 100.0 - (100.0 / (1.0 + RS))
+    data["RSI"] = RSI
+    return data
+
+def filer():
+    global macd
+    if fi:
+        fimacd = st.sidebar.checkbox("MACD")
+        firsi = st.sidebar.checkbox("RSI")
+
+        if fimacd:
+            macd = MACD(df)
+            st.line_chart(macd["MACD"])
+
+        if firsi:
+            rsi = RSI(df)
+            st.line_chart(rsi["RSI"])
+
+filer()
+
+st.sidebar.write("Tahmin")
+pred = st.sidebar.checkbox('Tahmin')
+
+if pred:
+    tickers = sembol
+
+    data = yf.download(tickers, period="3mo", interval="1d")
+    data.reset_index(inplace=True)
+
+    df_train = data[['Date', 'Close']]
+    df_train = df_train.rename(columns={"Date": "ds", "Close": "y"})
+    df_train['ds'] = df_train['ds'].dt.tz_convert(None)
+    m = Prophet()
+    m.fit(df_train)
+    future = m.make_future_dataframe(periods=90)
+    forecast = m.predict(future)
+    fig = m.plot(forecast)
+    fig2 = m.plot_components(forecast)
+    st.write(fig)
+    st.write(fig2)
